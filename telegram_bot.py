@@ -946,12 +946,5 @@ def start_bot():
 
     app.add_error_handler(_error_handler)
 
-    # Capture the REAL event loop once polling starts (post_start runs
-    # inside the asyncio.run() that run_polling creates).
-    async def _capture_loop(application):
-        global _bot_loop
-        _bot_loop = asyncio.get_running_loop()
-        log.info("Event loop captured for cross-thread notifications")
-
     log.info("Telegram bot started, polling...")
-    app.run_polling(drop_pending_updates=True, post_start=_capture_loop)
+    app.run_polling(drop_pending_updates=True)
