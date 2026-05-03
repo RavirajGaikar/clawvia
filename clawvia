@@ -1,0 +1,78 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# --------------------------------------------------------------
+# ClawVia Launcher
+# Usage: clawvia [--stop|--status|--logs|--config|--update]
+# --------------------------------------------------------------
+
+CLAWVIA_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+
+case "${1:-}" in
+    --stop)
+        echo "Stopping ClawVia..."
+        pkill -f "python3 run.py" 2>/dev/null && echo "✓ Stopped" || echo "! Not running"
+        ;;
+    --status)
+        if pgrep -f "python3 run.py" > /dev/null 2>&1; then
+            PID=$(pgrep -f "python3 run.py" | head -1)
+            UPTIME=$(ps -o etime= -p "$PID" 2>/dev/null || echo "unknown")
+            echo "🟢 ClawVia is running"
+            echo "   PID:    $PID"
+            echo "   Uptime: $UPTIME"
+        else
+            echo "🔴 ClawVia is not running"
+            echo "   Start with: clawvia"
+        fi
+        ;;
+    --logs)
+        if [ -f "$CLAWVIA_DIR/logs/clawvia.log" ]; then
+            tail -f "$CLAWVIA_DIR/logs/clawvia.log"
+        else
+            echo "No log file found yet. Start ClawVia first."
+        fi
+        ;;
+    --config)
+        if [ -f "$CLAWVIA_DIR/.env" ]; then
+            ${EDITOR:-nano} "$CLAWVIA_DIR/.env"
+        else
+            echo "No .env file found. Run the installer first:"
+            echo "  curl -fsSL https://raw.githubusercontent.com/RavirajGaikar/clawvia/main/install.sh | bash"
+        fi
+        ;;
+    --update)
+        echo "Updating ClawVia..."
+        REPO_DIR="$CLAWVIA_DIR"
+        if [ -d "$REPO_DIR/.git" ]; then
+            (cd "$REPO_DIR" && git pull --ff-only) && echo "✓ Updated" || echo "! Update failed"
+            echo "Marking dependencies for reinstall..."
+            rm -f "$CLAWVIA_DIR/venv/.venv_ready" 2>/dev/null
+            echo "✓ Updated — dependencies will reinstall on next start"
+            echo ""
+            echo "Restart ClawVia to apply changes:"
+            echo "  clawvia --stop && clawvia"
+        else
+            echo "! Not a git repo — reinstall with:"
+            echo "  curl -fsSL https://raw.githubusercontent.com/RavirajGaikar/clawvia/main/install.sh | bash"
+        fi
+        ;;
+    --help|-h)
+        echo "🦀 ClawVia — AI Assistant for Android"
+        echo ""
+        echo "Usage: clawvia [option]"
+        echo ""
+        echo "Options:"
+        echo "  (none)       Start ClawVia (with auto-restart on crash)"
+        echo "  --stop       Stop the running instance"
+        echo "  --status     Check if ClawVia is running"
+        echo "  --logs       Tail the live log output"
+        echo "  --config     Edit the .env configuration file"
+        echo "  --update     Pull latest code and update dependencies"
+        echo "  --help       Show this help message"
+        echo ""
+        echo "Install URL:"
+        echo "  curl -fsSL https://raw.githubusercontent.com/RavirajGaikar/clawvia/main/install.sh | bash"
+        ;;
+    *)
+        cd "$CLAWVIA_DIR"
+        exec bash start_server.sh
+        ;;
+esac

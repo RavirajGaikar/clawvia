@@ -1,0 +1,46 @@
+{
+  "notion": {
+    "name": "Notion",
+    "description": "Read, search, and update Notion pages and databases",
+    "package": "@notionhq/notion-mcp-server",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@notionhq/notion-mcp-server"],
+    "requires": "nodejs",
+    "auth": {
+      "type": "api_key",
+      "env_var": "NOTION_API_KEY",
+      "instructions": "Go to https://www.notion.so/my-integrations → New integration → Copy the Internal Integration Secret",
+      "hint": "ntn_..."
+    }
+  },
+  "github": {
+    "name": "GitHub",
+    "description": "Manage repos, issues, PRs, and code on GitHub",
+    "package": "@modelcontextprotocol/server-github",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "requires": "nodejs",
+    "auth": {
+      "type": "api_key",
+      "env_var": "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "instructions": "Go to https://github.com/settings/tokens → Generate new token (classic) → Select scopes: repo, read:user",
+      "hint": "ghp_..."
+    }
+  },
+  "google-calendar": {
+    "name": "Google Calendar",
+    "description": "View, create, and manage Google Calendar events",
+    "package": "@modelcontextprotocol/server-google-calendar",
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@anthropics/mcp-server-google-calendar"],
+    "requires": "nodejs",
+    "auth": {
+      "type": "oauth",
+      "env_var": "GOOGLE_CALENDAR_CREDENTIALS",
+      "instructions": "Follow the OAuth setup at https://console.cloud.google.com → Enable Calendar API → Download credentials.json. Paste the contents of the JSON file below."
+    }
+  }
+}

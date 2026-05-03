@@ -1,0 +1,11 @@
+# PhoneClaw dependencies
+# Compatible with fastapi<0.100 and pydantic<2 (required for Termux — pydantic 2 needs Rust)
+#
+# MCP servers are bundled in mcp_servers/ using only stdlib + requests.
+# Do NOT install mcp-server-fetch or the mcp SDK — they need pydantic>=2.
+fastapi==0.99.1
+pydantic==1.10.21
+uvicorn==0.22.0
+python-telegram-bot==20.3
+python-dotenv==1.0.0
+requests==2.31.0
