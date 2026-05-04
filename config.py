@@ -56,7 +56,7 @@ API_PORT = int(os.environ.get("API_PORT", "8001"))
 MAX_AGENT_STEPS = int(os.environ.get("MAX_AGENT_STEPS", "25"))
 LLM_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.5"))
 LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "2048"))
-LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "60"))
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "120"))
 
 # How many consecutive ERROR observations before the agent gives up / asks user.
 STUCK_ERROR_LIMIT = int(os.environ.get("STUCK_ERROR_LIMIT", "3"))
