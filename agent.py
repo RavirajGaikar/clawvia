@@ -24,7 +24,12 @@ import time
 import config
 from llm.client import chat, LLMError
 from llm.json_parser import extract_json
-from llm.prompts import build_planner_messages, build_system_prompt
+from llm.prompts import build_planner_messages
+
+# Global counter for batched post-task work (pattern extraction etc.)
+_task_counter = 0
+_task_counter_lock = threading.Lock()
+_POST_TASK_INTERVAL = 10  # Run post-task LLM work every N tasks
 from memory import db
 from memory.context import build_context
 from memory.compaction import auto_compact_if_needed
@@ -70,8 +75,55 @@ def _is_fast_path(text):
     return bool(_FAST_PATH_PATTERNS.match(text.strip()))
 
 
+# Hardcoded greetings — zero LLM calls for the most common phrases
+_GREETING_RESPONSES = {
+    "hi": "Hey! How can I help you?",
+    "hey": "Hey! What can I do for you?",
+    "hello": "Hello! How can I help you today?",
+    "howdy": "Howdy! What's on your mind?",
+    "hola": "Hola! How can I help?",
+    "hiya": "Hiya! What do you need?",
+    "yo": "Yo! What's up?",
+    "sup": "Hey! What's going on?",
+    "good morning": "Good morning! How can I help?",
+    "good afternoon": "Good afternoon! What can I do for you?",
+    "good evening": "Good evening! How can I help?",
+    "good night": "Good night! Need anything before I go?",
+    "bye": "Bye! Talk to you later.",
+    "gn": "Good night! Sleep well.",
+    "thanks": "You're welcome! Anything else?",
+    "thank you": "You're welcome! Let me know if you need anything else.",
+    "ty": "No problem! Anything else?",
+    "ok": "Got it! What's next?",
+    "okay": "Alright! Anything else?",
+    "cool": "Glad to help! Anything else?",
+    "nice": "Thanks! Need anything else?",
+    "great": "Glad to hear it! Need anything else?",
+    "awesome": "Glad it worked! Anything else?",
+    "perfect": "Great! Let me know if you need anything else.",
+    "got it": "Cool! What's next?",
+    "how are you": "I'm doing great, thanks for asking! How can I help?",
+    "who are you": "I'm ClawVia, your Android AI assistant! Ask me anything.",
+    "what are you": "I'm ClawVia — an AI assistant running on your device. I can search the web, manage files, run commands, and more!",
+    "whats your name": "I'm ClawVia! Your personal AI assistant.",
+    "what's your name": "I'm ClawVia! Your personal AI assistant.",
+    "whats up": "Not much! What can I help you with?",
+    "what's up": "Hey! What's going on?",
+}
+
+
 def _fast_response(task, session_id, context):
-    """Generate a direct response without the tool loop."""
+    """Generate a direct response without the tool loop.
+
+    First tries hardcoded responses (zero LLM cost), then falls back to
+    a cheap LLM call, and finally to a generic greeting.
+    """
+    # Try hardcoded first — instant, zero cost
+    key = task.strip().lower().rstrip("!?.")
+    if key in _GREETING_RESPONSES:
+        return _GREETING_RESPONSES[key]
+
+    # Fall back to LLM
     from llm.prompts import _load_soul
     soul = _load_soul()
     system = (
@@ -92,7 +144,8 @@ def _fast_response(task, session_id, context):
         return response.strip()
     except LLMError as exc:
         log.warning("Fast-path LLM failed: %s", exc)
-        return None  # Fall through to full agent loop
+        # Hardcoded fallback so we NEVER fall through to the full agent loop
+        return "Hey there! I'm ClawVia. How can I help you today?"
 
 # Wire session tools to the database module
 session_tools.set_db(db)
@@ -486,10 +539,15 @@ def _run_locked(task, session_id, max_steps, llm_temp, llm_max_tok,
         if response:
             db.add_message(session_id, "assistant", response)
             return response
-        # If fast-path LLM fails, fall through to full loop
-
     # Get tool metadata
     tools_meta = registry.get_all_metadata()
+
+    # Signal MCP servers: task is active — don't idle-shutdown
+    try:
+        from tools.mcp_client import set_task_active
+        set_task_active(True)
+    except Exception:
+        pass
 
     steps = []
     final_answer = None
@@ -704,6 +762,13 @@ def _run_locked(task, session_id, max_steps, llm_temp, llm_max_tok,
         else:
             final_answer = "I wasn't able to process that request."
 
+    # Signal MCP servers: task is done — idle shutdown allowed again
+    try:
+        from tools.mcp_client import set_task_active
+        set_task_active(False)
+    except Exception:
+        pass
+
     # Save the assistant message
     db.add_message(session_id, "assistant", final_answer)
 
@@ -715,7 +780,7 @@ def _run_locked(task, session_id, max_steps, llm_temp, llm_max_tok,
     errors_count = sum(1 for s in steps if s.get("observation", "").startswith("ERROR:"))
     is_success = not final_answer.startswith(("Sorry,", "Error:", "I hit", "I'm having"))
 
-    # Save task metrics for meta-learning
+    # Save task metrics (cheap, no LLM call)
     try:
         db.save_task_metrics(
             session_id=session_id,
@@ -728,19 +793,25 @@ def _run_locked(task, session_id, max_steps, llm_temp, llm_max_tok,
     except Exception as exc:
         log.debug("Task metrics save failed: %s", exc)
 
-    # Extract success pattern if task completed successfully with enough steps
+    # ── Background post-task work (every N tasks, in a thread) ────────
+    # Pattern extraction, profile extraction, auto-skill creation all
+    # involve LLM calls. Run them in a background thread and only every
+    # _POST_TASK_INTERVAL tasks to avoid blocking the user.
     if is_success:
-        try:
-            from memory.patterns import extract_pattern
-            extract_pattern(task, steps)
-        except Exception as exc:
-            log.debug("Pattern extraction failed: %s", exc)
+        global _task_counter
+        with _task_counter_lock:
+            _task_counter += 1
+            should_run_background = (_task_counter % _POST_TASK_INTERVAL == 0)
 
-        # Maybe extract user profile (every Nth task)
-        _maybe_extract_profile(session_id, task)
-
-        # Maybe auto-create a skill (complex novel tasks)
-        _maybe_create_skill(task, steps)
+        if should_run_background and len(steps) >= 3:
+            _bg_args = (session_id, task, list(steps))
+            threading.Thread(
+                target=_background_post_task,
+                args=_bg_args,
+                daemon=True,
+                name="post-task-bg",
+            ).start()
+            log.debug("Queued background post-task work (task #%d)", _task_counter)
 
     # Trim old checkpoints so the table stays small
     try:
@@ -749,3 +820,27 @@ def _run_locked(task, session_id, max_steps, llm_temp, llm_max_tok,
         log.debug("Checkpoint prune failed: %s", exc)
 
     return final_answer
+
+
+def _background_post_task(session_id, task, steps):
+    """Run post-task LLM work in a background thread.
+
+    Called every _POST_TASK_INTERVAL successful tasks. Extracts patterns,
+    user profile, and auto-creates skills — all of which involve LLM calls
+    that would otherwise block the user.
+    """
+    try:
+        from memory.patterns import extract_pattern
+        extract_pattern(task, steps)
+    except Exception as exc:
+        log.debug("Background pattern extraction failed: %s", exc)
+
+    try:
+        _maybe_extract_profile(session_id, task)
+    except Exception as exc:
+        log.debug("Background profile extraction failed: %s", exc)
+
+    try:
+        _maybe_create_skill(task, steps)
+    except Exception as exc:
+        log.debug("Background skill creation failed: %s", exc)

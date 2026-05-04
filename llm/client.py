@@ -12,6 +12,64 @@ _MAX_RETRIES = 2
 _RETRY_DELAY = 2  # seconds
 
 
+def _extract_text(data):
+    """Extract assistant text from any known response format.
+
+    Tries, in order:
+      1. Standard OpenAI: choices[0].message.content
+      2. choices[0].message.text
+      3. choices[0].text  (older completions API)
+      4. choices[0].content
+      5. Top-level "content" key
+      6. Top-level "text" key
+      7. result.text or result (string)
+
+    Returns the text string, or raises LLMError on failure.
+    """
+    if not isinstance(data, dict):
+        raise LLMError(f"Response is not a dict: {str(data)[:300]}")
+
+    # ── choices-based formats ──
+    choices = data.get("choices")
+    if choices and isinstance(choices, list) and len(choices) > 0:
+        c0 = choices[0]
+        if isinstance(c0, dict):
+            # Standard: choices[0].message.content
+            msg = c0.get("message")
+            if isinstance(msg, dict):
+                for key in ("content", "text"):
+                    val = msg.get(key)
+                    if val and isinstance(val, str):
+                        return val
+            # Older: choices[0].text or choices[0].content
+            for key in ("text", "content"):
+                val = c0.get(key)
+                if val and isinstance(val, str):
+                    return val
+
+    # ── Top-level fields ──
+    for key in ("content", "text", "output"):
+        val = data.get(key)
+        if val and isinstance(val, str):
+            return val
+
+    # ── result field ──
+    result = data.get("result")
+    if result:
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict):
+            for key in ("text", "content"):
+                val = result.get(key)
+                if val and isinstance(val, str):
+                    return val
+
+    raise LLMError(
+        f"No recognized content field in response. "
+        f"Keys: {list(data.keys())}. Preview: {str(data)[:400]}"
+    )
+
+
 def chat(messages, temperature=None, max_tokens=None):
     """Send a chat-completion request and return the assistant text.
 
@@ -42,11 +100,12 @@ def chat(messages, temperature=None, max_tokens=None):
     for attempt in range(_MAX_RETRIES + 1):
         try:
             log.debug(
-                "LLM request attempt %d/%d (model=%s, msgs=%d)",
+                "LLM request attempt %d/%d (model=%s, msgs=%d, tokens=%d)",
                 attempt + 1,
                 _MAX_RETRIES + 1,
                 config.NVIDIA_MODEL,
                 len(messages),
+                max_tokens,
             )
             resp = requests.post(
                 config.NVIDIA_API_URL,
@@ -66,35 +125,7 @@ def chat(messages, temperature=None, max_tokens=None):
             resp.raise_for_status()
 
             data = resp.json()
-            log.debug("LLM raw response keys: %s", list(data.keys()) if isinstance(data, dict) else "not a dict")
-            
-            # Try standard OpenAI format
-            try:
-                text = data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError, TypeError):
-                # Fallback: try alternative formats
-                log.warning("Standard format failed, trying alternatives. Response: %s", str(data)[:500])
-                if isinstance(data, dict):
-                    # Try direct content field
-                    if "content" in data:
-                        text = data["content"]
-                    # Try text field
-                    elif "text" in data:
-                        text = data["text"]
-                    # Try result field
-                    elif "result" in data:
-                        result = data["result"]
-                        if isinstance(result, dict) and "text" in result:
-                            text = result["text"]
-                        elif isinstance(result, str):
-                            text = result
-                        else:
-                            raise LLMError(f"Unexpected response format in 'result': {str(data)[:300]}")
-                    else:
-                        raise LLMError(f"No recognized content field in response: {str(data)[:300]}")
-                else:
-                    raise LLMError(f"Response is not a dict: {str(data)[:300]}")
-            
+            text = _extract_text(data)
             log.debug("LLM response (%d chars)", len(text))
             return text
 

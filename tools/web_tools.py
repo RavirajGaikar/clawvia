@@ -101,13 +101,51 @@ def _is_url_safe(url):
 
 @registry.register(
     "web_search",
-    "Search the web using DuckDuckGo. Returns top results with titles and snippets.",
+    "Search the web using DuckDuckGo. Returns top results with titles and snippets. "
+    "TIP: Use these snippets directly to answer questions — avoid fetching full pages unless absolutely necessary.",
     {"query": "string (search query)"},
+    cacheable=True,
 )
 def web_search(query):
     if not query or not query.strip():
         return "ERROR: Empty search query"
 
+    # ── Try DuckDuckGo Instant Answer API first (structured, fast) ────
+    try:
+        api_url = f"https://api.duckduckgo.com/?q={quote_plus(query)}&format=json&no_html=1&skip_disambig=1"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36"
+        }
+        api_resp = requests.get(api_url, headers=headers, timeout=8)
+        if api_resp.ok:
+            data = api_resp.json()
+            instant_parts = []
+
+            # Abstract (Wikipedia-style summary)
+            abstract = data.get("AbstractText", "").strip()
+            if abstract:
+                source = data.get("AbstractSource", "")
+                instant_parts.append(f"Summary ({source}): {abstract}")
+
+            # Answer (direct computation / fact)
+            answer = data.get("Answer", "").strip()
+            if answer:
+                instant_parts.append(f"Answer: {answer}")
+
+            # Related topics as mini-snippets
+            for topic in (data.get("RelatedTopics") or [])[:5]:
+                if isinstance(topic, dict) and topic.get("Text"):
+                    instant_parts.append(f"- {topic['Text'][:200]}")
+
+            if instant_parts:
+                result = f"DuckDuckGo Instant Answer for: {query}\n\n"
+                result += "\n".join(instant_parts)
+                result += "\n\n[TIP: These snippets are often enough to answer. Only fetch full pages if you need more detail.]"
+                return result
+    except Exception as exc:
+        log.debug("DDG Instant Answer failed: %s", exc)
+
+    # ── Fallback: HTML search results with snippets ───────────────────
     try:
         url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
         headers = {
@@ -131,6 +169,7 @@ def web_search(query):
                 output_lines.append(f"   URL: {r['url']}")
             output_lines.append("")
 
+        output_lines.append("[TIP: Use these snippets to answer directly. Only fetch a URL if you need specific detail not in snippets.]")
         return "\n".join(output_lines)
 
     except requests.exceptions.Timeout:

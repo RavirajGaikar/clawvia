@@ -58,8 +58,23 @@ _CLIENTS = {}
 _CLIENT_CONFIGS = {}
 _LAST_USED = {}
 
-# Idle timeout for MCP servers (shut down after 5 mins of inactivity)
-_IDLE_TIMEOUT_SEC = 300
+# Idle timeout for MCP servers (shut down after 10 mins of inactivity)
+_IDLE_TIMEOUT_SEC = 600
+
+# Task-active flag: when True, idle watchdog skips shutdown.
+# Set by agent.py during active task execution.
+_task_active = False
+_task_active_lock = threading.Lock()
+
+
+def set_task_active(active):
+    """Signal whether an agent task is actively running.
+
+    While active, the idle watchdog will not shut down MCP servers.
+    """
+    global _task_active
+    with _task_active_lock:
+        _task_active = active
 
 
 # ─── Stdio transport ─────────────────────────────────────────────────────────
@@ -495,9 +510,16 @@ def load_mcp_servers(config_path=None):
     return total
 
 def _idle_watchdog():
-    """Periodically shut down MCP servers that haven't been used recently."""
+    """Periodically shut down MCP servers that haven't been used recently.
+
+    Skips shutdown entirely while an agent task is actively running.
+    """
     while True:
         time.sleep(60)
+        # Don't shut down servers while a task is in progress
+        with _task_active_lock:
+            if _task_active:
+                continue
         now = time.time()
         to_shutdown = []
         for name, last_used in list(_LAST_USED.items()):
