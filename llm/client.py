@@ -66,7 +66,35 @@ def chat(messages, temperature=None, max_tokens=None):
             resp.raise_for_status()
 
             data = resp.json()
-            text = data["choices"][0]["message"]["content"]
+            log.debug("LLM raw response keys: %s", list(data.keys()) if isinstance(data, dict) else "not a dict")
+            
+            # Try standard OpenAI format
+            try:
+                text = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                # Fallback: try alternative formats
+                log.warning("Standard format failed, trying alternatives. Response: %s", str(data)[:500])
+                if isinstance(data, dict):
+                    # Try direct content field
+                    if "content" in data:
+                        text = data["content"]
+                    # Try text field
+                    elif "text" in data:
+                        text = data["text"]
+                    # Try result field
+                    elif "result" in data:
+                        result = data["result"]
+                        if isinstance(result, dict) and "text" in result:
+                            text = result["text"]
+                        elif isinstance(result, str):
+                            text = result
+                        else:
+                            raise LLMError(f"Unexpected response format in 'result': {str(data)[:300]}")
+                    else:
+                        raise LLMError(f"No recognized content field in response: {str(data)[:300]}")
+                else:
+                    raise LLMError(f"Response is not a dict: {str(data)[:300]}")
+            
             log.debug("LLM response (%d chars)", len(text))
             return text
 
@@ -86,8 +114,8 @@ def chat(messages, temperature=None, max_tokens=None):
                 continue
             raise LLMError(last_error)
 
-        except (KeyError, IndexError) as exc:
-            raise LLMError(f"Unexpected response format: {exc}")
+        except LLMError:
+            raise
 
     raise LLMError(last_error or "Unknown LLM error")
 

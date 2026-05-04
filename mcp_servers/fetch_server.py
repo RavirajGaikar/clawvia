@@ -77,26 +77,51 @@ TOOLS = [
 
 
 def _extract_text_from_html(html):
-    """Best-effort HTML→text. Uses a simple tag-stripping approach.
+    """Best-effort HTML→text. Removes scripts, styles, metadata, and noise.
 
     We avoid importing bs4/lxml/readability since they may not be available
-    on Termux. This is intentionally simple.
+    on Termux. This improved version targets common page elements that
+    should be excluded (CSS vars, font-face, animations, etc).
     """
     import re
 
-    # Remove script/style blocks
+    # Remove entire <script> and <style> blocks with their content
     html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
-    # Replace block tags with newlines
-    html = re.sub(r"<(br|p|div|h[1-6]|li|tr|blockquote)[^>]*/?>", "\n", html, flags=re.I)
-    # Strip remaining tags
+    
+    # Remove meta, link, noscript tags
+    html = re.sub(r"<(meta|link|noscript)[^>]*>", "", html, flags=re.I)
+    
+    # Remove CSS declarations in style attributes and @-rules at block level
+    html = re.sub(r'style="[^"]*"', "", html, flags=re.I)
+    html = re.sub(r"style='[^']*'", "", html, flags=re.I)
+    html = re.sub(r"@[a-z-]+\s*\{[^}]*\}", "", html, flags=re.S | re.I)
+    
+    # Replace structural tags with newlines
+    html = re.sub(r"<(br|hr|p|div|h[1-6]|li|tr|td|th|blockquote|article|section|header|footer|main|nav)[^>]*>", "\n", html, flags=re.I)
+    
+    # Remove all remaining HTML tags
     html = re.sub(r"<[^>]+>", "", html)
-    # Decode common entities
-    for entity, char in [("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
-                         ("&nbsp;", " "), ("&quot;", '"'), ("&#39;", "'")]:
+    
+    # Decode HTML entities
+    entities = {
+        "&amp;": "&", "&lt;": "<", "&gt;": ">",
+        "&nbsp;": " ", "&quot;": '"', "&#39;": "'",
+        "&apos;": "'", "&hellip;": "...", "&ndash;": "–",
+        "&mdash;": "—", "&rsquo;": "'", "&lsquo;": "'",
+        "&rdquo;": '"', "&ldquo;": '"',
+    }
+    for entity, char in entities.items():
         html = html.replace(entity, char)
-    # Collapse whitespace
+    
+    # Also handle numeric entities like &#123; and &#x1a2b;
+    html = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))) if int(m.group(1)) < 0x10000 else "", html)
+    html = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)) if int(m.group(1), 16) < 0x10000 else "", html)
+    
+    # Clean up excessive whitespace and collapse lines
     lines = [line.strip() for line in html.splitlines()]
-    return "\n".join(line for line in lines if line)
+    lines = [line for line in lines if line and len(line) > 2]  # Filter empty and 1-2 char lines (noise)
+    
+    return "\n".join(lines)
 
 
 def _do_fetch(url, max_length=None, raw=False):
